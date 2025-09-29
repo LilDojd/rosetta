@@ -28,10 +28,13 @@
 #include <protocols/simple_task_operations/RestrictToInterface.hh>
 #include <core/pack/task/operation/TaskOperations.hh>
 #include <core/pack/dunbrack/RotamerConstraint.hh>
+#include <core/pack/task/ResidueLevelTask.hh>
 
 #include <core/pose/Pose.hh>
 #include <core/pose/PDBInfo.hh>
 #include <core/pose/util.hh>
+#include <core/pose/init_id_map.hh>
+#include <core/pose/chains_util.hh>
 #include <core/import_pose/import_pose.hh>
 
 #include <basic/options/option.hh>
@@ -55,6 +58,7 @@
 #include <core/kinematics/MoveMap.hh>
 #include <utility/vector1.hh>
 #include <utility/file/FileName.hh>
+#include <utility/pointer/memory.hh>
 
 //neighbors, hbonds & sasa calculator
 #include <core/scoring/TenANeighborGraph.hh>
@@ -79,7 +83,7 @@
 #include <protocols/rigid/RigidBodyMover.hh>
 #include <protocols/docking/DockingProtocol.hh>
 #include <protocols/docking/DockingPrepackProtocol.hh>
-#include <protocols/antibody2/LHRepulsiveRamp.hh>
+#include <protocols/antibody/LHRepulsiveRamp.hh>
 
 // option key includes
 #include <basic/options/keys/pH.OptionKeys.gen.hh>
@@ -201,8 +205,8 @@ public:
 			}
 		}
 
-		Size jump_pos1 ( geometry::residue_center_of_mass( pose, 1, cutpoint ) );
-		Size jump_pos2 ( geometry::residue_center_of_mass( pose, cutpoint+1, pose.size() ) );
+		Size jump_pos1 ( core::pose::residue_center_of_mass( pose, 1, cutpoint ) );
+		Size jump_pos2 ( core::pose::residue_center_of_mass( pose, cutpoint+1, pose.size() ) );
 
 		//setup fold tree based on cutpoints and jump points
 		f.clear();
@@ -254,7 +258,7 @@ public:
 		raw_scores.push_back(pose.energies().total_energies()[fa_pair]);
 		raw_scores.push_back(pose.energies().total_energies()[fa_rep]);
 		raw_scores.push_back(pose.energies().total_energies()[fa_sol]);
-		raw_scores.push_back(pose.energies().total_energies()[hack_elec]);
+		raw_scores.push_back(pose.energies().total_energies()[fa_elec]);
 		raw_scores.push_back(pose.energies().total_energies()[hbond_bb_sc]);
 		raw_scores.push_back(pose.energies().total_energies()[hbond_lr_bb]);
 		raw_scores.push_back(pose.energies().total_energies()[hbond_sc]);
@@ -280,12 +284,12 @@ public:
 		Size ant1_start_chain = pose::get_chain_id_from_chain(ant1_chains[0], pose1);
 		Size ant1_stop_chain = pose::get_chain_id_from_chain(ant1_chains[ant1_chains.length()-1], pose1);
 		Size ant2_start_chain = pose::get_chain_id_from_chain(ant2_chains[0], pose2);
-		Size ant2_stop_chain = pose::get_chain_id_from_chain(ant2_chains[ant1_chains.length()-1], pose2);
+		// Size ant2_stop_chain = pose::get_chain_id_from_chain(ant2_chains[ant1_chains.length()-1], pose2);
 
 		Size ant1_start_res = pose1.conformation().chain_begin(ant1_start_chain);
 		Size ant1_stop_res = pose1.conformation().chain_end(ant1_stop_chain);
 		Size ant2_start_res = pose2.conformation().chain_begin(ant2_start_chain);
-		Size ant2_stop_res = pose2.conformation().chain_end(ant2_stop_chain);
+		// Size ant2_stop_res = pose2.conformation().chain_end(ant2_stop_chain);
 
 		Size jj = ant2_start_res;
 		for ( Size ii = ant1_start_res; ii <= ant1_stop_res; ++ii ) {
@@ -371,7 +375,6 @@ public:
 		std::string const partner_info
 	){
 		utility::vector1< std::string > partners;   //Vec(partner1,partner2)
-		char split = '_';
 
 		for ( Size i = 0; i <= partner_info.length()-1; i++ ) {
 			if ( partner_info[i] == '_' ) {
@@ -417,7 +420,7 @@ public:
 		core::scoring::ScoreFunctionOP docking_scorefxn;
 		core::pose::Pose complex_pose = pose;
 
-		docking_scorefxn = new core::scoring::ScoreFunction( *scorefxn ) ;
+		docking_scorefxn = scorefxn->clone();
 		docking_scorefxn->set_weight( core::scoring::atom_pair_constraint, 0.0 );
 
 		// calculate energy of complexed pose
@@ -468,7 +471,7 @@ public:
 		return energies_and_sasa;
 	}
 
-	protocols::antibody2::LHRepulsiveRampOP
+	protocols::antibody::LHRepulsiveRampOP
 	setup_RepulsiveRampMover(core::pose::Pose & pose){
 
 		using namespace core;
@@ -479,7 +482,7 @@ public:
 		core::scoring::ScoreFunctionCOP refine_score_fxn2(core::scoring::ScoreFunctionFactory::create_score_function("standard"));
 
 		//movemap
-		core::kinematics::MoveMapOP movemap = new kinematics::MoveMap();
+		core::kinematics::MoveMapOP movemap = utility::pointer::make_shared< core::kinematics::MoveMap >();
 		movemap->set_chi(false);
 		movemap->set_bb(false);
 		for ( utility::vector1_int::const_iterator it = movable_jumps_.begin(); it != movable_jumps_.end(); ++it ) {
@@ -487,25 +490,25 @@ public:
 		}
 
 		//taskfactory
-		core::pack::task::TaskFactoryOP tf = new TaskFactory;
+		core::pack::task::TaskFactoryOP tf = utility::pointer::make_shared< core::pack::task::TaskFactory >();
 		tf->clear();
-		tf->push_back(new OperateOnCertainResidues(new PreventRepackingRLT, new ResidueLacksProperty("PROTEIN")));
-		tf->push_back(new InitializeFromCommandline);
-		tf->push_back(new IncludeCurrent);
-		tf->push_back(new RestrictToRepacking);
-		tf->push_back(new NoRepackDisulfides);
+		tf->push_back( utility::pointer::make_shared< OperateOnCertainResidues >( utility::pointer::make_shared< PreventRepackingRLT >(), utility::pointer::make_shared< ResidueLacksProperty >( "PROTEIN" ) ) );
+		tf->push_back( utility::pointer::make_shared< InitializeFromCommandline >() );
+		tf->push_back( utility::pointer::make_shared< IncludeCurrent >() );
+		tf->push_back( utility::pointer::make_shared< RestrictToRepacking >() );
+		tf->push_back( utility::pointer::make_shared< NoRepackDisulfides >() );
 
-		using namespace protocols::task_operations;
-		tf->push_back(new RestrictToInterface());
+		using namespace protocols::simple_task_operations;
+		tf->push_back( utility::pointer::make_shared< RestrictToInterface >() );
 
 		// unbound_rot
-		pack::rotamer_set::UnboundRotamersOperationOP unboundrot = new pack::rotamer_set::UnboundRotamersOperation();
+		pack::rotamer_set::UnboundRotamersOperationOP unboundrot = utility::pointer::make_shared< pack::rotamer_set::UnboundRotamersOperation >();
 		unboundrot->initialize_from_command_line();
-		operation::AppendRotamerSetOP unboundrot_operation = new operation::AppendRotamerSet(unboundrot);
+		operation::AppendRotamerSetOP unboundrot_operation = utility::pointer::make_shared< operation::AppendRotamerSet >( unboundrot );
 		tf->push_back(unboundrot_operation);
 		core::pack::dunbrack::load_unboundrot(pose);
 
-		protocols::antibody2::LHRepulsiveRampOP RR_mover = new protocols::antibody2::LHRepulsiveRamp(movable_jumps_, refine_score_fxn1, refine_score_fxn2 );
+		protocols::antibody::LHRepulsiveRampOP RR_mover = utility::pointer::make_shared< protocols::antibody::LHRepulsiveRamp >( movable_jumps_, refine_score_fxn1, refine_score_fxn2 );
 		RR_mover->set_rot_mag(5.0);
 		RR_mover->set_task_factory(tf);
 		RR_mover->set_move_map(movemap);
@@ -530,10 +533,10 @@ public:
 		//Dock local refine before feeding the complex to score calculations
 		if ( pre_process_ ) {
 			if ( refine_ ) {
-				antibody2::LHRepulsiveRampOP dock_refine_mover = setup_RepulsiveRampMover(pose);
+				antibody::LHRepulsiveRampOP dock_refine_mover = setup_RepulsiveRampMover(pose);
 				dock_refine_mover->apply(pose);
 			} else {
-				docking::DockingProtocolOP dock_refine_mover = new docking::DockingProtocol(movable_jumps_, false, false, false);
+					docking::DockingProtocolOP dock_refine_mover = utility::pointer::make_shared< docking::DockingProtocol >( movable_jumps_, false, false, false );
 				dock_refine_mover->apply(pose);
 			}
 		}
@@ -580,7 +583,7 @@ public:
 			job->add_string_real_pair("rint.fa_pair", scores_and_sasa[10]);
 			job->add_string_real_pair("rint.fa_rep", scores_and_sasa[11]);
 			job->add_string_real_pair("rint.fa_sol", scores_and_sasa[12]);
-			job->add_string_real_pair("rint.hack_elec", scores_and_sasa[13]);
+			job->add_string_real_pair("rint.fa_elec", scores_and_sasa[13]);
 			job->add_string_real_pair("rint.hbond_bb_sc", scores_and_sasa[14]);
 			job->add_string_real_pair("rint.hbond_lr_bb", scores_and_sasa[15]);
 			job->add_string_real_pair("rint.hbond_sc", scores_and_sasa[16]);
@@ -593,7 +596,7 @@ public:
 	virtual
 	protocols::moves::MoverOP
 	fresh_instance() const {
-		return new abbinding;
+		return utility::pointer::make_shared< abbinding >();
 	}
 
 	virtual
@@ -618,13 +621,13 @@ private:
 	utility::vector1< utility::file::FileName > unbound_pdbs_;
 };
 
-typedef utility::pointer::owning_ptr< abbinding > abbindingOP;
+// owning_ptr has been removed; use standard OPs via utility::pointer::shared_ptr
 
 ///////////////////////////////////////////////////////////////////////////////
 int
 main( int argc, char * argv [] )
 {
 	devel::init(argc, argv);
-	abbindingOP ab_test(new abbinding);
+	protocols::moves::MoverOP ab_test = utility::pointer::make_shared< abbinding >();
 	protocols::jd2::JobDistributor::get_instance()->go(ab_test);
 }

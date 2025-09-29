@@ -627,6 +627,7 @@ sources = {
 	],
 	"pilot/krishna" : [
 		#"pH_neighbor_pack",
+        "ab_binding",
 	],
 	"pilot/kuichan" : [
 		#"design_disulfide",
